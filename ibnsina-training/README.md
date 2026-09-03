@@ -65,7 +65,10 @@ A master line looks like this:
   "category": "general_medical",
   "source": "manual",
   "review_status": "draft",
-  "review": {"reviewer": null, "reviewed_at": null, "notes": null},
+  "reviews": {
+    "language": {"status": "pending", "reviewer": null, "reviewed_at": null, "notes": null},
+    "medical":  {"status": "pending", "reviewer": null, "reviewed_at": null, "notes": null}
+  },
   "messages": [
     {"role": "system", "content": "..."},
     {"role": "user", "content": "..."},
@@ -89,42 +92,106 @@ and the corresponding export line is just:
 | `category` | Topic bucket, e.g. `general_medical`, `symptom_guidance`, `care_seeking`. |
 | `source` | Where the example came from, e.g. `manual`. |
 | `review_status` | Where the example is in review (see below). |
-| `review` | Who reviewed the example and when (see below). |
+| `reviews` | The two independent human reviews (see below). |
 | `messages` | The conversation itself, in chat/messages format. |
 
 #### Review metadata
 
-Every master record carries a `review` object recording the human review behind
-its status:
+Ibn Sina training data needs two **independent** human reviews, because "reads
+well" and "is medically acceptable" are different questions answered by different
+people:
 
 ```json
-"review": {
-  "reviewer": "reviewer-001",
-  "reviewed_at": "2026-09-03T10:30:00Z",
-  "notes": "Language and medical wording reviewed."
+"reviews": {
+  "language": {
+    "status": "passed",
+    "reviewer": "language-reviewer-001",
+    "reviewed_at": "2026-09-03T10:30:00Z",
+    "notes": null
+  },
+  "medical": {
+    "status": "failed",
+    "reviewer": "medical-reviewer-001",
+    "reviewed_at": "2026-09-03T11:00:00Z",
+    "notes": "The response gives an overly broad medical claim."
+  }
 }
 ```
 
-| Field | Meaning |
+**Language review** asks whether the text works as language: natural phrasing,
+grammar, clarity, terminology, and whether the response sounds appropriate in the
+target language.
+
+**Medical review** asks whether the content is acceptable as medical
+communication: medical correctness, unsafe statements, misleading claims, and
+whether the guidance is appropriate.
+
+**Passing a language review does not imply medical correctness.** They are
+separate judgements by separate reviewers, and neither substitutes for the other.
+
+##### Per-review status
+
+Each review section carries its own `status`:
+
+| Value | Meaning |
 | --- | --- |
-| `reviewer` | Internal identifier of the human reviewer. |
-| `reviewed_at` | When the human review occurred, as an ISO 8601 datetime. |
-| `notes` | Optional review notes. May be `null`. |
+| `pending` | This review has not been completed. |
+| `passed` | The reviewer accepted this aspect of the example. |
+| `failed` | The reviewer found a problem. |
 
-An **approved** record must have a non-empty `reviewer` and a valid ISO 8601
-`reviewed_at`; `notes` may be `null` or a string. `draft`, `reviewed`, and
-`rejected` records may leave all three `null` — that is how the three current
-examples look. An approved record whose review is still empty fails the export:
+What each status requires:
+
+| | `pending` | `passed` | `failed` |
+| --- | --- | --- | --- |
+| `reviewer` | may be null | required | required |
+| `reviewed_at` | may be null | required | required |
+| `notes` | may be null | optional | **required** |
+
+A `failed` review must say why. A rejection with no reason is not useful to
+whoever reads the master file later.
+
+`reviewer` is an internal identifier (see below). `reviewed_at` must be a
+**timezone-aware** ISO 8601 datetime — `2026-09-03T10:30:00Z` or
+`2026-09-03T13:30:00+03:00`. A bare date (`2026-09-03`) and a naive timestamp with
+no offset (`2026-09-03T10:30:00`) are both rejected: reviewers work in different
+places, and a time without an offset does not identify a moment. Parsing uses the
+standard library's `datetime.fromisoformat` — no date libraries are added.
+
+##### The approval rule
 
 ```
-Line 1: approved record "uz-med-000001" is missing reviewer
-Line 1: approved record "uz-med-000001" is missing reviewed_at
+Language review passed
+          +
+Medical review passed
+          +
+review_status set to "approved" by a person
+          |
+          v
+Eligible for a training export
 ```
 
-`reviewed_at` accepts normal ISO 8601 datetimes such as `2026-09-03T10:30:00Z` or
-`2026-09-03T13:30:00+03:00`, and rejects things like `yesterday`, `03/09/2026`, or
-a bare date with no time. Parsing uses the standard library's
-`datetime.fromisoformat` — no date libraries are added.
+A record with `review_status: "approved"` is valid **only** when both
+`reviews.language.status` and `reviews.medical.status` are `passed`, each with
+valid reviewer metadata. Any other combination fails the export:
+
+```
+Line 1: approved record "uz-med-000001" cannot be approved: the medical review is "pending" (both reviews must be "passed")
+```
+
+**The reverse does not hold.** Two passed reviews never make a record approved by
+themselves. Nothing in these scripts writes to a master file or changes a
+`review_status` — they validate states, they do not make workflow decisions. This
+is valid master data that simply does not export:
+
+```
+review_status = reviewed
+language      = passed
+medical       = passed
+```
+
+Likewise, a `rejected` record never exports, and no automatic link is imposed
+between a failed review and `review_status`. A record may be rejected for a human
+reason even when both reviews passed.
 
 ##### Reviewer identifiers and privacy
 
@@ -138,7 +205,10 @@ is ever needed, belongs outside the training data.
 
 **Review metadata records that a human review occurred. It does not itself prove
 that the medical content is correct.** Nothing in this repository checks the
-quality of a review — only that one is recorded.
+quality of a review — only that one is recorded. And **passing a medical review
+does not automatically authorize the example for training**: only records
+explicitly marked `approved`, with both reviews passed, may enter a training
+export.
 
 #### Language codes
 
@@ -153,19 +223,23 @@ data — no translations exist yet.
 | `en` | English |
 | `kaa` | Karakalpak |
 
-#### Review status
+#### Record review status
+
+This is the record-level `review_status`, distinct from the per-review `status`
+values above:
 
 | Value | Meaning |
 | --- | --- |
 | `draft` | Work in progress. Not reviewed. All current examples are `draft`. |
-| `reviewed` | Someone has reviewed it, but it is **not** yet authorized for training. |
+| `reviewed` | Human review activity has occurred, but the record is **not** authorized for training. |
 | `approved` | Explicitly authorized to enter a training export. |
-| `rejected` | Must not be used for training. |
+| `rejected` | Must not be used for training. Never exports, whatever its reviews say. |
 
 Only `approved` records are exported. `draft`, `reviewed`, and `rejected` records
 are counted in the export summary but never written to a model-ready file. An
-`approved` record must also carry completed review metadata (see above), so a
-record cannot become approved without leaving a trace of who reviewed it.
+`approved` record must also have both reviews `passed` with valid reviewer
+metadata (see above), so a record cannot become approved without leaving a trace
+of who reviewed it. None of these statuses is ever assigned automatically.
 
 **Changing a record to `approved` is a human decision. The scripts do not determine
 medical correctness.** No medical review system is implemented and none is planned
@@ -186,11 +260,12 @@ Its purpose is to teach:
 Master dataset            data/master/uzbek_medical_v1.jsonl
       |
       v
-Human review              a person reads the example
-      |
+Language review           reviews.language.status = passed
+      +
+Medical review            reviews.medical.status = passed
+      |                   each with its reviewer and timestamp
       v
-review_status = approved  set by hand in the master file,
-review.reviewer/at        together with who reviewed it and when
+review_status = approved  set by hand, as a separate human decision
       |
       v
 export_dataset.py         exports approved records only, strips metadata
@@ -276,8 +351,9 @@ reviewed yet.
 
 Before writing anything, the exporter checks every master record for the seven
 required fields, a non-empty string `id`, a known `language`, a known
-`review_status`, a well-formed `review` object — with a reviewer and a valid ISO
-8601 `reviewed_at` on every approved record — and a non-empty `messages` list — and it rejects duplicate `id`
+`review_status`, a well-formed `reviews` object — both the language and medical
+review present and internally consistent, and both `passed` with valid reviewer
+metadata on every approved record — and a non-empty `messages` list — and it rejects duplicate `id`
 values, reporting the line where the id was first seen. Duplicate ids fail the
 whole run even when one of the duplicates would have been skipped as unapproved,
 because ids identify master records rather than exported ones.
@@ -371,9 +447,9 @@ permission-controlled memory/data layer.
 
 ## Status
 
-**Step 6.** Project structure, the first dataset, dataset validation,
-sensitive-data scanning, the master/export split, approval gating, and human
-review metadata.
+**Step 7.** Project structure, the first dataset, dataset validation,
+sensitive-data scanning, the master/export split, approval gating, and separate
+language and medical review metadata.
 
 No model training, fine-tuning, inference, evaluation, or API integration is
 implemented yet.

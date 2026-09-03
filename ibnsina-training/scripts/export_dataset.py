@@ -20,16 +20,28 @@ draft, merely reviewed, or rejected are counted in the summary but never reach a
 training export. Approval is a human decision recorded in the master file; this
 script only reads it, it never sets it.
 
-An approved record must also carry the trace of that human review:
+Every record carries two independent human reviews:
 
-    "review": {"reviewer": "reviewer-001",
-               "reviewed_at": "2026-09-03T10:30:00Z",
-               "notes": "Language and medical wording reviewed."}
+    "reviews": {
+      "language": {"status": "passed", "reviewer": "language-reviewer-001",
+                   "reviewed_at": "2026-09-03T10:30:00Z", "notes": null},
+      "medical":  {"status": "passed", "reviewer": "medical-reviewer-001",
+                   "reviewed_at": "2026-09-03T11:00:00Z",
+                   "notes": "Wording is cautious and refers the reader to a doctor."}
+    }
 
-reviewer must be a non-empty string, reviewed_at a valid ISO 8601 datetime, and
-notes either null or a string. Records that are not approved may leave all three
-null. Nothing here judges whether the review was any good — it only records that
-a person did one.
+Each review is "pending", "passed" or "failed". A pending review may leave
+reviewer, reviewed_at and notes null. A passed review needs a reviewer and a
+timezone-aware ISO 8601 timestamp. A failed review needs those plus notes saying
+what the problem was.
+
+A record may only be approved when BOTH reviews passed. The reverse does not
+hold: two passed reviews never make a record approved by themselves. Nothing in
+this script writes to a master file or changes a review_status — approval stays
+an explicit human action, and a record with both reviews passed but a status of
+"reviewed" is perfectly valid master data that simply does not export.
+
+Nothing here judges whether a review was any good, only that one is recorded.
 
 The whole master file is checked first — required metadata fields, known values,
 and duplicate ids across every record regardless of status. If any record fails,
@@ -63,12 +75,21 @@ REQUIRED_FIELDS = (
     "category",
     "source",
     "review_status",
-    "review",
+    "reviews",
     "messages",
 )
 
-# Keys every "review" object carries; they may be null unless the record is approved.
-REVIEW_FIELDS = ("reviewer", "reviewed_at", "notes")
+# The two independent human reviews every record carries.
+REVIEW_SECTIONS = ("language", "medical")
+
+# Keys every review section carries.
+REVIEW_FIELDS = ("status", "reviewer", "reviewed_at", "notes")
+
+# Allowed per-review outcomes.
+REVIEW_SECTION_STATUSES = ("pending", "passed", "failed")
+
+# The per-review outcome both sections need before a record may be approved.
+PASSING_SECTION_STATUS = "passed"
 
 # Only this status may enter a model-ready training export.
 EXPORTABLE_REVIEW_STATUS = "approved"
@@ -122,8 +143,8 @@ def check_record(record, seen_ids):
         elif not messages:
             errors.append('"messages" cannot be empty')
 
-    if "review" in record:
-        errors.extend(check_review(record))
+    if "reviews" in record:
+        errors.extend(check_reviews(record))
 
     return errors
 
@@ -167,11 +188,13 @@ def read_master(path):
 
 
 def parse_iso_datetime(value):
-    """Parse an ISO 8601 datetime string, or return None if it is not one.
+    """Parse a timezone-aware ISO 8601 datetime, or return None if it is not one.
 
     A trailing "Z" is normalised to "+00:00" so the check behaves the same on
     Python versions older than 3.11. A bare date such as "2026-09-03" is
-    rejected: reviewed_at records when a review happened, not just the day.
+    rejected: reviewed_at records when a review happened, not just the day. So
+    is a naive timestamp — reviewers are in different places, and a time with no
+    offset does not identify a moment.
     """
     if not isinstance(value, str) or not value.strip():
         return None
@@ -188,54 +211,133 @@ def parse_iso_datetime(value):
     if "T" not in value.upper():
         return None
 
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+
     return parsed
 
 
-def check_review(record):
-    """Return the review-metadata errors for one master record.
+def describe_timestamp_problem(value):
+    """Return a message describing why a timestamp is unusable, or None if it is fine."""
+    if not isinstance(value, str):
+        return "must be an ISO 8601 datetime string or null"
 
-    Every record must carry a "review" object with the three review keys. The
-    values may all be null unless the record is approved, in which case a
-    reviewer and a reviewed_at timestamp are required.
+    if parse_iso_datetime(value) is not None:
+        return None
+
+    return (
+        "%s is not a timezone-aware ISO 8601 datetime "
+        "(expected e.g. 2026-09-03T10:30:00Z or 2026-09-03T13:30:00+03:00)"
+        % json.dumps(value)
+    )
+
+
+def check_review_section(name, section, record_label):
+    """Return the errors for one review section ("language" or "medical").
+
+    A pending review may leave reviewer, reviewed_at and notes null. A passed
+    review needs a reviewer and a timezone-aware ISO 8601 timestamp. A failed
+    review needs those plus notes saying what the problem was — a rejection
+    without a reason is not useful to anyone reading the master file later.
     """
+    where = "reviews.%s" % name
     errors = []
-    review = record.get("review")
 
-    if not isinstance(review, dict):
-        return ['"review" must be a JSON object']
+    if not isinstance(section, dict):
+        return ["%s must be a JSON object" % where]
 
     for field in REVIEW_FIELDS:
-        if field not in review:
-            errors.append('"review" is missing "%s"' % field)
+        if field not in section:
+            errors.append('%s is missing "%s"' % (where, field))
 
-    approved = record.get("review_status") == EXPORTABLE_REVIEW_STATUS
-    record_id = record.get("id")
-    label = 'approved record "%s"' % record_id if isinstance(record_id, str) else "approved record"
+    unexpected = sorted(set(section) - set(REVIEW_FIELDS))
+    for field in unexpected:
+        errors.append('%s has an unexpected field "%s"' % (where, field))
 
-    reviewer = review.get("reviewer")
-    if approved:
-        if reviewer is None or (isinstance(reviewer, str) and not reviewer.strip()):
-            errors.append("%s is missing reviewer" % label)
-        elif not isinstance(reviewer, str):
-            errors.append("%s has a non-string reviewer" % label)
-    elif reviewer is not None and not isinstance(reviewer, str):
-        errors.append('"review.reviewer" must be a string or null')
+    status = section.get("status")
+    if "status" in section and status not in REVIEW_SECTION_STATUSES:
+        errors.append(
+            '%s has an invalid status %s (allowed: %s)'
+            % (where, json.dumps(status), ", ".join(REVIEW_SECTION_STATUSES))
+        )
+        # The remaining rules depend on the status, so stop here.
+        return errors
 
-    reviewed_at = review.get("reviewed_at")
-    if approved:
-        if reviewed_at is None:
-            errors.append("%s is missing reviewed_at" % label)
-        elif parse_iso_datetime(reviewed_at) is None:
-            errors.append(
-                "%s has an invalid reviewed_at %s (expected an ISO 8601 datetime, "
-                "e.g. 2026-09-03T10:30:00Z)" % (label, json.dumps(reviewed_at))
-            )
-    elif reviewed_at is not None and parse_iso_datetime(reviewed_at) is None:
-        errors.append('"review.reviewed_at" must be an ISO 8601 datetime or null')
+    completed = status in ("passed", "failed")
 
-    notes = review.get("notes")
+    reviewer = section.get("reviewer")
+    if reviewer is not None and not isinstance(reviewer, str):
+        errors.append("%s.reviewer must be a string or null" % where)
+    elif completed and (reviewer is None or not reviewer.strip()):
+        errors.append(
+            '%s is "%s" but has no reviewer%s' % (where, status, record_label)
+        )
+
+    reviewed_at = section.get("reviewed_at")
+    if reviewed_at is not None:
+        problem = describe_timestamp_problem(reviewed_at)
+        if problem:
+            errors.append("%s.reviewed_at %s" % (where, problem))
+    elif completed:
+        errors.append(
+            '%s is "%s" but has no reviewed_at%s' % (where, status, record_label)
+        )
+
+    notes = section.get("notes")
     if notes is not None and not isinstance(notes, str):
-        errors.append('"review.notes" must be a string or null')
+        errors.append("%s.notes must be a string or null" % where)
+    elif status == "failed" and (notes is None or not notes.strip()):
+        errors.append(
+            '%s is "failed" but has no notes explaining why%s' % (where, record_label)
+        )
+
+    return errors
+
+
+def check_reviews(record):
+    """Return the review errors for one master record.
+
+    Every record carries both review sections. A record may only be approved
+    when both of them passed; nothing here ever changes review_status, and a
+    record whose reviews both passed stays unapproved until a person says so.
+    """
+    reviews = record.get("reviews")
+    if not isinstance(reviews, dict):
+        return ['"reviews" must be a JSON object']
+
+    record_id = record.get("id")
+    record_label = ' in record "%s"' % record_id if isinstance(record_id, str) else ""
+
+    errors = []
+
+    for name in sorted(set(reviews) - set(REVIEW_SECTIONS)):
+        errors.append('"reviews" has an unexpected section "%s"' % name)
+
+    for name in REVIEW_SECTIONS:
+        if name not in reviews:
+            errors.append('"reviews" is missing the "%s" review' % name)
+        else:
+            errors.extend(check_review_section(name, reviews[name], record_label))
+
+    if record.get("review_status") != EXPORTABLE_REVIEW_STATUS:
+        return errors
+
+    # Approval gate: both reviews must have passed.
+    label = (
+        'approved record "%s"' % record_id
+        if isinstance(record_id, str)
+        else "approved record"
+    )
+    for name in REVIEW_SECTIONS:
+        section = reviews.get(name)
+        if not isinstance(section, dict):
+            continue
+        status = section.get("status")
+        if status in REVIEW_SECTION_STATUSES and status != PASSING_SECTION_STATUS:
+            errors.append(
+                '%s cannot be approved: the %s review is "%s" (both reviews must '
+                'be "%s")' % (label, name, status, PASSING_SECTION_STATUS)
+            )
 
     return errors
 
