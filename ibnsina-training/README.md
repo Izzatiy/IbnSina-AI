@@ -13,7 +13,8 @@ ibnsina-training/
 ├── datasets/
 │   └── uzbek_medical_v1.jsonl
 ├── scripts/
-│   └── validate_dataset.py
+│   ├── validate_dataset.py
+│   └── scan_sensitive_data.py
 └── README.md
 ```
 
@@ -65,6 +66,39 @@ that:
 It exits with code `0` when the dataset passes and a non-zero code when it fails,
 so it can be used in a shell pipeline or a CI check.
 
+## Sensitive-data scanning
+
+A second, separate check looks for obvious personally identifiable or sensitive
+data in the text of a dataset:
+
+```bash
+python scripts/scan_sensitive_data.py datasets/uzbek_medical_v1.jsonl
+```
+
+It inspects every `content` field of every message and reports the line number,
+the message index, and the category of each match:
+
+- `EMAIL` — email addresses;
+- `PHONE` — international (`+998 90 123 45 67`, `+998901234567`) and grouped local
+  (`90 123 45 67`) phone-like numbers;
+- `URL_TOKEN` — URLs carrying a credential-looking query parameter such as
+  `token`, `access_token`, `api_key`, `secret`, or `password`;
+- `SECRET` — assignments such as `API_KEY=...` or `password: ...`;
+- `IP` — IPv4 addresses, reported as *potentially* sensitive rather than assumed
+  to be private.
+
+Secret values are never printed in full — they are redacted, e.g.
+`SECRET: API_KEY=abcd********`.
+
+Exit codes match the validator: `0` when nothing is found, `1` when something is
+found, `2` on a read or input error.
+
+**Passing this scanner does not guarantee that a dataset contains no personal or
+sensitive information. It is only a first deterministic safety check.** It matches
+fixed patterns only: it does not detect people's names, does not understand context,
+and deliberately does not treat medical conditions as sensitive matches. Human
+review remains required before any dataset is accepted.
+
 ## Privacy rule
 
 **Private patient information must never be added directly to training datasets.**
@@ -78,7 +112,8 @@ permission-controlled memory/data layer.
 
 ## Status
 
-**Step 2.** Project structure, the first dataset, and dataset validation.
+**Step 3.** Project structure, the first dataset, dataset validation, and
+sensitive-data scanning.
 
 No model training, fine-tuning, inference, evaluation, or API integration is
 implemented yet.
