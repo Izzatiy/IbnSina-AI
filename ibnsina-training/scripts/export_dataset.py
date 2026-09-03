@@ -20,6 +20,17 @@ draft, merely reviewed, or rejected are counted in the summary but never reach a
 training export. Approval is a human decision recorded in the master file; this
 script only reads it, it never sets it.
 
+An approved record must also carry the trace of that human review:
+
+    "review": {"reviewer": "reviewer-001",
+               "reviewed_at": "2026-09-03T10:30:00Z",
+               "notes": "Language and medical wording reviewed."}
+
+reviewer must be a non-empty string, reviewed_at a valid ISO 8601 datetime, and
+notes either null or a string. Records that are not approved may leave all three
+null. Nothing here judges whether the review was any good — it only records that
+a person did one.
+
 The whole master file is checked first — required metadata fields, known values,
 and duplicate ids across every record regardless of status. If any record fails,
 or if no record is approved, nothing is written and an existing export file is
@@ -42,10 +53,22 @@ import json
 import os
 import sys
 import tempfile
+from datetime import datetime
 
 ALLOWED_LANGUAGES = ("uz-Latn", "uz-Cyrl", "ru", "en", "kaa")
 ALLOWED_REVIEW_STATUSES = ("draft", "reviewed", "approved", "rejected")
-REQUIRED_FIELDS = ("id", "language", "category", "source", "review_status", "messages")
+REQUIRED_FIELDS = (
+    "id",
+    "language",
+    "category",
+    "source",
+    "review_status",
+    "review",
+    "messages",
+)
+
+# Keys every "review" object carries; they may be null unless the record is approved.
+REVIEW_FIELDS = ("reviewer", "reviewed_at", "notes")
 
 # Only this status may enter a model-ready training export.
 EXPORTABLE_REVIEW_STATUS = "approved"
@@ -99,6 +122,9 @@ def check_record(record, seen_ids):
         elif not messages:
             errors.append('"messages" cannot be empty')
 
+    if "review" in record:
+        errors.extend(check_review(record))
+
     return errors
 
 
@@ -138,6 +164,80 @@ def read_master(path):
             records.append(record)
 
     return records, errors, total
+
+
+def parse_iso_datetime(value):
+    """Parse an ISO 8601 datetime string, or return None if it is not one.
+
+    A trailing "Z" is normalised to "+00:00" so the check behaves the same on
+    Python versions older than 3.11. A bare date such as "2026-09-03" is
+    rejected: reviewed_at records when a review happened, not just the day.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+    if "T" not in value.upper():
+        return None
+
+    return parsed
+
+
+def check_review(record):
+    """Return the review-metadata errors for one master record.
+
+    Every record must carry a "review" object with the three review keys. The
+    values may all be null unless the record is approved, in which case a
+    reviewer and a reviewed_at timestamp are required.
+    """
+    errors = []
+    review = record.get("review")
+
+    if not isinstance(review, dict):
+        return ['"review" must be a JSON object']
+
+    for field in REVIEW_FIELDS:
+        if field not in review:
+            errors.append('"review" is missing "%s"' % field)
+
+    approved = record.get("review_status") == EXPORTABLE_REVIEW_STATUS
+    record_id = record.get("id")
+    label = 'approved record "%s"' % record_id if isinstance(record_id, str) else "approved record"
+
+    reviewer = review.get("reviewer")
+    if approved:
+        if reviewer is None or (isinstance(reviewer, str) and not reviewer.strip()):
+            errors.append("%s is missing reviewer" % label)
+        elif not isinstance(reviewer, str):
+            errors.append("%s has a non-string reviewer" % label)
+    elif reviewer is not None and not isinstance(reviewer, str):
+        errors.append('"review.reviewer" must be a string or null')
+
+    reviewed_at = review.get("reviewed_at")
+    if approved:
+        if reviewed_at is None:
+            errors.append("%s is missing reviewed_at" % label)
+        elif parse_iso_datetime(reviewed_at) is None:
+            errors.append(
+                "%s has an invalid reviewed_at %s (expected an ISO 8601 datetime, "
+                "e.g. 2026-09-03T10:30:00Z)" % (label, json.dumps(reviewed_at))
+            )
+    elif reviewed_at is not None and parse_iso_datetime(reviewed_at) is None:
+        errors.append('"review.reviewed_at" must be an ISO 8601 datetime or null')
+
+    notes = review.get("notes")
+    if notes is not None and not isinstance(notes, str):
+        errors.append('"review.notes" must be a string or null')
+
+    return errors
 
 
 def count_statuses(records):
