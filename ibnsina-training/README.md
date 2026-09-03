@@ -97,14 +97,18 @@ data — no translations exist yet.
 
 | Value | Meaning |
 | --- | --- |
-| `draft` | Written but not reviewed. All current examples are `draft`. |
-| `reviewed` | Looked at by a reviewer. |
-| `approved` | Accepted for training. |
-| `rejected` | Not to be used. |
+| `draft` | Work in progress. Not reviewed. All current examples are `draft`. |
+| `reviewed` | Someone has reviewed it, but it is **not** yet authorized for training. |
+| `approved` | Explicitly authorized to enter a training export. |
+| `rejected` | Must not be used for training. |
 
-This is metadata only. **No medical review system is implemented** — nothing
-currently checks or enforces these values beyond their spelling, and the exporter
-does not yet filter on them.
+Only `approved` records are exported. `draft`, `reviewed`, and `rejected` records
+are counted in the export summary but never written to a model-ready file.
+
+**Changing a record to `approved` is a human decision. The scripts do not determine
+medical correctness.** No medical review system is implemented and none is planned
+for automation — nothing in this repository reads a conversation and decides whether
+it is safe. The exporter only reads the value a person wrote.
 
 Its purpose is to teach:
 
@@ -117,20 +121,29 @@ Its purpose is to teach:
 ## Pipeline
 
 ```
-Master dataset          data/master/uzbek_medical_v1.jsonl
+Master dataset            data/master/uzbek_medical_v1.jsonl
       |
       v
-export_dataset.py       strips metadata, checks ids and metadata fields
+Human review              a person reads the example
       |
       v
-Model-ready dataset     data/exports/uzbek_medical_v1.jsonl
+review_status = approved  set by hand in the master file
       |
       v
-validate_dataset.py     checks the chat/messages structure
+export_dataset.py         exports approved records only, strips metadata
       |
       v
-scan_sensitive_data.py  checks for obvious personal or sensitive data
+Model-ready dataset       data/exports/uzbek_medical_v1.jsonl
+      |
+      v
+validate_dataset.py       checks the chat/messages structure
+      |
+      v
+scan_sensitive_data.py    checks for obvious personal or sensitive data
 ```
+
+Nothing reaches a training export without passing through the approval step, and
+nothing sets that approval automatically.
 
 Run it end to end:
 
@@ -143,6 +156,10 @@ python scripts/validate_dataset.py data/exports/uzbek_medical_v1.jsonl
 
 python scripts/scan_sensitive_data.py data/exports/uzbek_medical_v1.jsonl
 ```
+
+Right now the first command stops the pipeline: every example in
+`uzbek_medical_v1` is still `draft`, so there is nothing approved to export. Approve
+records in the master file first.
 
 **A dataset that comes out the far end of this pipeline is still NOT automatically
 safe or medically approved for production model training.** These three scripts
@@ -160,17 +177,55 @@ python scripts/export_dataset.py \
   data/exports/uzbek_medical_v1.jsonl
 ```
 
-Before writing anything, it checks every master record for the six required
-fields, a non-empty string `id`, a known `language`, a known `review_status`, and
-a non-empty `messages` list — and it rejects duplicate `id` values, reporting the
-line where the id was first seen. All errors in the file are reported at once, and
-the export file is left untouched if any record fails.
+**Only records with `review_status: "approved"` are exported.** The summary reports
+how many records sit at each status:
 
-All records are exported regardless of `review_status`. Filtering on approval is
-deliberately not implemented yet.
+```
+Master records: 5
 
-Exit codes: `0` on success, `1` for an invalid master dataset, `2` for a read or
-write error.
+Approved: 2
+Draft: 1
+Reviewed: 1
+Rejected: 1
+
+Exported examples: 2
+Skipped examples: 3
+
+Dataset export PASSED.
+```
+
+If no record is approved, the export **fails** rather than producing an empty
+training file:
+
+```
+Approved: 0
+Draft: 3
+
+Exported examples: 0
+
+Dataset export FAILED.
+Reason: no approved records are available for training.
+```
+
+This is the current state of `uzbek_medical_v1` — all three examples are still
+`draft`, so it does not export. That is intended: nothing has been medically
+reviewed yet.
+
+Before writing anything, the exporter checks every master record for the six
+required fields, a non-empty string `id`, a known `language`, a known
+`review_status`, and a non-empty `messages` list — and it rejects duplicate `id`
+values, reporting the line where the id was first seen. Duplicate ids fail the
+whole run even when one of the duplicates would have been skipped as unapproved,
+because ids identify master records rather than exported ones.
+
+The operation is all-or-nothing. If any record fails validation, or no record is
+approved, nothing is written and an existing export file stays byte-for-byte
+unchanged — it is not truncated first. The write itself goes to a temporary file
+that is moved into place only once complete, so an interrupted write cannot leave
+a partial export behind.
+
+Exit codes: `0` on success, `1` for an invalid master dataset or no approved
+records, `2` for a read or write error.
 
 ## Dataset validation
 
@@ -227,6 +282,15 @@ fixed patterns only: it does not detect people's names, does not understand cont
 and deliberately does not treat medical conditions as sensitive matches. Human
 review remains required before any dataset is accepted.
 
+## The master dataset is the source of truth
+
+`review_status` lives only in `data/master/`. Exported datasets do not carry it,
+so it can never be changed there.
+
+To approve an example: edit its record in the master file, then re-run the export.
+Never edit a file in `data/exports/` by hand — it is generated output and the next
+export overwrites it.
+
 ## Privacy rule
 
 **Private patient information must never be added directly to training datasets.**
@@ -240,8 +304,8 @@ permission-controlled memory/data layer.
 
 ## Status
 
-**Step 4.** Project structure, the first dataset, dataset validation,
-sensitive-data scanning, and the master/export split.
+**Step 5.** Project structure, the first dataset, dataset validation,
+sensitive-data scanning, the master/export split, and approval gating.
 
 No model training, fine-tuning, inference, evaluation, or API integration is
 implemented yet.
