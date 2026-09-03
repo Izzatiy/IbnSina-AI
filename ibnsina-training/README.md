@@ -13,8 +13,7 @@ ibnsina-training/
 ├── data/
 │   ├── master/
 │   │   └── uzbek_medical_v1.jsonl
-│   └── exports/
-│       └── uzbek_medical_v1.jsonl
+│   └── exports/          (empty — nothing is approved yet)
 ├── scripts/
 │   ├── validate_dataset.py
 │   ├── scan_sensitive_data.py
@@ -37,6 +36,17 @@ metadata is stripped. This is what a trainer would eventually consume.
 
 Export files are generated output: edit the master and re-export rather than
 editing an export by hand.
+
+**This directory is currently empty, and that is correct.** No master record is
+approved yet, so there is nothing that may legitimately be exported. An empty
+`data/exports/` means "nothing has been authorized for training" — it is not a
+missing file or a broken setup, and it must not be filled in by hand or with
+sample data. It stays empty until someone approves a record in the master file and
+re-runs the exporter. (`.gitkeep` is there only so Git tracks the directory.)
+
+A previous export generated before approval gating existed was deleted for this
+reason: it had been produced from `draft` records and could no longer be
+reproduced under the current rules.
 
 ### `scripts/`
 
@@ -220,7 +230,10 @@ because ids identify master records rather than exported ones.
 
 The operation is all-or-nothing. If any record fails validation, or no record is
 approved, nothing is written and an existing export file stays byte-for-byte
-unchanged — it is not truncated first. The write itself goes to a temporary file
+unchanged — it is not truncated first. A failed export never deletes or overwrites
+a previously valid approved export; the last good training file survives a bad run
+untouched. Equally, a failed export never creates one, so `data/exports/` simply
+stays empty while nothing is approved. The write itself goes to a temporary file
 that is moved into place only once complete, so an interrupted write cannot leave
 a partial export behind.
 

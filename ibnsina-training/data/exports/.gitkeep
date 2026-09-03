@@ -1,0 +1,4 @@
+This directory holds generated, model-ready export files.
+
+It is intentionally empty: no master record is currently approved, so there is
+nothing to export. Do not add data here by hand — run scripts/export_dataset.py.
