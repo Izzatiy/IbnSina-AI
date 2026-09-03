@@ -21,6 +21,7 @@ REQUIRED_FIELDS = (
     "source",
     "review_status",
     "reviews",
+    "approval",
     "messages",
 )
 
@@ -32,6 +33,12 @@ REVIEW_FIELDS = ("status", "reviewer", "reviewed_at", "notes")
 
 # Allowed per-review outcomes.
 REVIEW_SECTION_STATUSES = ("pending", "passed", "failed")
+
+# Keys the "approval" object carries; they may be null unless the record is approved.
+APPROVAL_FIELDS = ("approver", "approved_at", "notes")
+
+# The record statuses approve_record.py may move a record away from.
+APPROVABLE_FROM_STATUSES = ("draft", "reviewed")
 
 # The per-review outcome both sections need before a record may be approved.
 PASSING_SECTION_STATUS = "passed"
@@ -90,6 +97,9 @@ def check_record(record, seen_ids):
 
     if "reviews" in record:
         errors.extend(check_reviews(record))
+
+    if "approval" in record:
+        errors.extend(check_approval(record))
 
     return errors
 
@@ -283,6 +293,55 @@ def check_reviews(record):
                 '%s cannot be approved: the %s review is "%s" (both reviews must '
                 'be "%s")' % (label, name, status, PASSING_SECTION_STATUS)
             )
+
+    return errors
+
+
+def check_approval(record):
+    """Return the approval-metadata errors for one master record.
+
+    A record that is not approved may leave every approval field null. An
+    approved one must name who authorised it and when, because approval is the
+    step that lets a record reach a training export.
+    """
+    approval = record.get("approval")
+    if not isinstance(approval, dict):
+        return ['"approval" must be a JSON object']
+
+    errors = []
+
+    for field in APPROVAL_FIELDS:
+        if field not in approval:
+            errors.append('"approval" is missing "%s"' % field)
+
+    for field in sorted(set(approval) - set(APPROVAL_FIELDS)):
+        errors.append('"approval" has an unexpected field "%s"' % field)
+
+    approved = record.get("review_status") == EXPORTABLE_REVIEW_STATUS
+    record_id = record.get("id")
+    label = (
+        'approved record "%s"' % record_id
+        if isinstance(record_id, str)
+        else "approved record"
+    )
+
+    approver = approval.get("approver")
+    if approver is not None and not isinstance(approver, str):
+        errors.append('"approval.approver" must be a string or null')
+    elif approved and (approver is None or not approver.strip()):
+        errors.append("%s has no approval.approver" % label)
+
+    approved_at = approval.get("approved_at")
+    if approved_at is not None:
+        problem = describe_timestamp_problem(approved_at)
+        if problem:
+            errors.append("approval.approved_at %s" % problem)
+    elif approved:
+        errors.append("%s has no approval.approved_at" % label)
+
+    notes = approval.get("notes")
+    if notes is not None and not isinstance(notes, str):
+        errors.append('"approval.notes" must be a string or null')
 
     return errors
 

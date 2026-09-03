@@ -19,7 +19,8 @@ ibnsina-training/
 │   ├── validate_dataset.py
 │   ├── scan_sensitive_data.py
 │   ├── export_dataset.py
-│   └── review_record.py
+│   ├── review_record.py
+│   └── approve_record.py
 └── README.md
 ```
 
@@ -73,6 +74,7 @@ A master line looks like this:
     "language": {"status": "pending", "reviewer": null, "reviewed_at": null, "notes": null},
     "medical":  {"status": "pending", "reviewer": null, "reviewed_at": null, "notes": null}
   },
+  "approval": {"approver": null, "approved_at": null, "notes": null},
   "messages": [
     {"role": "system", "content": "..."},
     {"role": "user", "content": "..."},
@@ -97,6 +99,7 @@ and the corresponding export line is just:
 | `source` | Where the example came from, e.g. `manual`. |
 | `review_status` | Where the example is in review (see below). |
 | `reviews` | The two independent human reviews (see below). |
+| `approval` | Who authorised the record for training, and when (see below). |
 | `messages` | The conversation itself, in chat/messages format. |
 
 #### Review metadata
@@ -214,6 +217,34 @@ does not automatically authorize the example for training**: only records
 explicitly marked `approved`, with both reviews passed, may enter a training
 export.
 
+#### Approval metadata
+
+Passing both reviews is not the same as authorising a record for training. That
+authorisation is recorded separately:
+
+```json
+"approval": {
+  "approver": "training-approver-001",
+  "approved_at": "2026-09-03T09:45:00Z",
+  "notes": "Both language and medical reviews verified."
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `approver` | Internal identifier of the person who authorised the record. |
+| `approved_at` | When the approval happened, as a timezone-aware ISO 8601 datetime. |
+| `notes` | Optional approval notes. May be `null`. |
+
+A record that is not approved may leave all three `null` — that is how the three
+current examples look. An `approved` record must have a non-blank `approver` and a
+valid timezone-aware `approved_at`, under the same timestamp rules as
+`reviewed_at`: a bare date and a naive timestamp are both rejected.
+
+`approver` follows the same privacy rule as `reviewer`: an internal, stable
+identifier such as `training-approver-001`, `medical-lead-001` or
+`dataset-owner-001` — never a personal name, email address or phone number.
+
 #### Language codes
 
 These codes are reserved for future use. Only `uz-Latn` currently appears in the
@@ -261,28 +292,39 @@ Its purpose is to teach:
 ## Pipeline
 
 ```
-Master dataset            data/master/uzbek_medical_v1.jsonl
+Draft master record        data/master/uzbek_medical_v1.jsonl
       |
       v
-Language review           reviews.language.status = passed
-      +                   recorded with review_record.py
-Medical review            reviews.medical.status = passed
-      |                   recorded with review_record.py
-      v
-review_status = approved  set by hand, as a separate human decision
+Language human review      review_record.py --type language
       |
       v
-export_dataset.py         exports approved records only, strips metadata
+Medical human review       review_record.py --type medical
       |
       v
-Model-ready dataset       data/exports/uzbek_medical_v1.jsonl
+Both passed                reviews.language.status = reviews.medical.status = passed
       |
       v
-validate_dataset.py       checks the chat/messages structure
+Explicit human approval    approve_record.py --approver ...
       |
       v
-scan_sensitive_data.py    checks for obvious personal or sensitive data
+review_status = approved   with approval.approver and approval.approved_at
+      |
+      v
+export_dataset.py          exports approved records only, strips metadata
+      |
+      v
+Model-ready JSONL          data/exports/uzbek_medical_v1.jsonl
+      |
+      v
+validate_dataset.py        checks the chat/messages structure
+      |
+      v
+scan_sensitive_data.py     checks for obvious personal or sensitive data
 ```
+
+**No step happens automatically.** Each arrow above is a person deciding to take
+it. Passing a review does not schedule an approval, and approving a record does
+not run an export.
 
 Nothing reaches a training export without passing through the approval step, and
 nothing sets that approval automatically.
@@ -396,6 +438,82 @@ exactly as they were, one JSON object per line, in the original order.
 
 Exit codes: `0` recorded, `1` invalid dataset or request (record not found,
 duplicate id, already-completed review, bad argument), `2` file or system error.
+
+## Approval CLI
+
+`review_status` is not edited by hand either. `approve_record.py` performs the
+final human authorisation:
+
+```bash
+python scripts/approve_record.py \
+  data/master/uzbek_medical_v1.jsonl \
+  uz-med-000001 \
+  --approver training-approver-001
+
+# with a note
+python scripts/approve_record.py \
+  data/master/uzbek_medical_v1.jsonl \
+  uz-med-000001 \
+  --approver training-approver-001 \
+  --notes "Both language and medical reviews verified."
+```
+
+Output:
+
+```
+Record approval
+
+Dataset:
+data/master/uzbek_medical_v1.jsonl
+
+Record:
+uz-med-000001
+
+Language review: passed
+Medical review: passed
+Approver: training-approver-001
+Approved at: 2026-09-03T09:45:00Z
+
+Review status: approved
+
+Record approval PASSED.
+```
+
+**Reviews and approval are different things.** The reviews determine whether the
+language and medical checks passed. Approval is the separate human authorisation
+that lets a record enter a training export — someone taking responsibility for
+putting this example into training data.
+
+**`approve_record.py` never approves a record unless both required reviews have
+already passed.** Anything else is refused:
+
+```
+Record approval FAILED.
+Reason: both reviews must be "passed" before approval (medical review is "pending").
+```
+
+Two passed reviews still do not approve a record. Only a person running this
+command does.
+
+**Approved records cannot be re-approved or edited by this command.** An already
+approved record is refused (`record is already approved.`), and so is a rejected
+one (`rejected records cannot be approved with this command.`). Only a `draft` or
+`reviewed` record may be approved. Reopening and restoring are not implemented.
+
+`--approver` is required and must not be blank; it is an internal identifier, not
+a personal name. `approved_at` is generated by the tool from the current UTC time —
+there is no timestamp argument. `--notes` is optional, and whitespace-only notes
+are stored as `null` rather than as a blank string.
+
+A successful approval changes only `review_status` and the `approval` object. The
+reviews, the messages, and all other metadata are left exactly as they were. As
+with the review CLI, the whole master file is validated before and after the
+change, a missing or duplicated id is refused rather than guessed at, and the
+write is atomic, so any failure leaves the master byte-for-byte unchanged.
+
+Exit codes: `0` approved, `1` invalid dataset or request (unmet reviews, record
+not found, duplicate id, already approved, rejected, bad argument), `2` file or
+system error.
 
 ## Dataset export
 
@@ -539,9 +657,9 @@ permission-controlled memory/data layer.
 
 ## Status
 
-**Step 8.** Project structure, the first dataset, dataset validation,
+**Step 9.** Project structure, the first dataset, dataset validation,
 sensitive-data scanning, the master/export split, approval gating, separate
-language and medical review metadata, and the human review CLI.
+language and medical review metadata, the human review CLI, and the approval CLI.
 
 No model training, fine-tuning, inference, evaluation, or API integration is
 implemented yet.
