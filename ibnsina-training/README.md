@@ -515,6 +515,36 @@ Exit codes: `0` approved, `1` invalid dataset or request (unmet reviews, record
 not found, duplicate id, already approved, rejected, bad argument), `2` file or
 system error.
 
+## First smoke-test dataset
+
+`uzbek_medical_v1` intentionally contains only **10 Uzbek Latin records**. That is
+not an oversight and it is not a production medical dataset — it is the smallest
+set that can prove the whole pipeline works before any training is attempted.
+
+- **10 records, `uz-Latn` only.** No Russian, English, Cyrillic Uzbek or
+  Karakalpak yet, and no specialised diagnosis or treatment cases. The topics are
+  simple and educational: hydration during mild illness, common-cold self-care,
+  headache and chest-pain warning signs, when a persistent cough needs assessment,
+  why antibiotics are not for viral illness, and sleep hygiene.
+- **Only genuinely human-reviewed and approved records enter the model-ready
+  export.** A record needs a real language review, a real medical review, and an
+  explicit approval — recorded through the CLIs — before it can be exported.
+  Records still in draft are simply not exported.
+- **This dataset is for pipeline and training smoke testing, not production
+  clinical quality.** Ten short examples cannot teach safe medical communication;
+  they can only demonstrate that master records, reviews, approval, export,
+  validation and privacy scanning fit together.
+- **More data will be added only after the first training pipeline works end to
+  end.** Growing the dataset before that would mean reviewing material that the
+  pipeline might not even be able to consume.
+
+### Current status of this dataset
+
+All 10 records are `draft` with both reviews `pending`. **No medical review has
+been performed**, so nothing is approved and `data/exports/` is empty. The dataset
+is waiting on a qualified human medical reviewer; the tooling itself has been
+verified end to end against temporary synthetic copies.
+
 ## Dataset export
 
 `export_dataset.py` reads a master dataset and writes the model-ready export:
@@ -657,9 +687,11 @@ permission-controlled memory/data layer.
 
 ## Status
 
-**Step 9.** Project structure, the first dataset, dataset validation,
+**Step 10.** The pipeline is complete: master records, dataset validation,
 sensitive-data scanning, the master/export split, approval gating, separate
-language and medical review metadata, the human review CLI, and the approval CLI.
+language and medical review metadata, the review CLI, and the approval CLI.
 
-No model training, fine-tuning, inference, evaluation, or API integration is
-implemented yet.
+The first smoke-test dataset has been written — 10 Uzbek Latin records, all
+`draft`. **The training export is blocked pending real human medical review.**
+No model training, fine-tuning, inference or API integration is implemented.
+
