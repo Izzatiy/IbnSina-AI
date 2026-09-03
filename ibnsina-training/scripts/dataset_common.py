@@ -49,6 +49,15 @@ EXPORTABLE_REVIEW_STATUS = "approved"
 # Order the status counts are reported in.
 REPORTED_STATUSES = ("approved", "draft", "reviewed", "rejected")
 
+# Optional master-only audit trail of replaced completed reviews. Never exported.
+REVIEW_HISTORY_FIELD = "review_history"
+
+# Keys every review_history entry carries.
+REVIEW_HISTORY_ENTRY_FIELDS = ("type", "previous", "replaced_at", "replaced_by", "reason")
+
+# A review is "completed" once a human has passed or failed it.
+COMPLETED_SECTION_STATUSES = ("passed", "failed")
+
 
 def check_record(record, seen_ids):
     """Return the metadata errors for one master record.
@@ -100,6 +109,9 @@ def check_record(record, seen_ids):
 
     if "approval" in record:
         errors.extend(check_approval(record))
+
+    if REVIEW_HISTORY_FIELD in record:
+        errors.extend(check_review_history(record))
 
     return errors
 
@@ -342,6 +354,81 @@ def check_approval(record):
     notes = approval.get("notes")
     if notes is not None and not isinstance(notes, str):
         errors.append('"approval.notes" must be a string or null')
+
+    return errors
+
+
+def check_review_history(record):
+    """Return the review_history errors for one master record.
+
+    review_history is optional. When present it must be a list of append-only
+    audit entries, each recording a completed review that a re-review replaced.
+    An entry keeps the whole previous review verbatim, plus when it was
+    replaced, by whom, and the reason. Nothing here is ever exported.
+    """
+    history = record.get(REVIEW_HISTORY_FIELD)
+    if not isinstance(history, list):
+        return ['"%s" must be an array' % REVIEW_HISTORY_FIELD]
+
+    errors = []
+
+    for index, entry in enumerate(history):
+        where = "%s[%d]" % (REVIEW_HISTORY_FIELD, index)
+
+        if not isinstance(entry, dict):
+            errors.append("%s must be a JSON object" % where)
+            continue
+
+        for field in REVIEW_HISTORY_ENTRY_FIELDS:
+            if field not in entry:
+                errors.append('%s is missing "%s"' % (where, field))
+
+        for field in sorted(set(entry) - set(REVIEW_HISTORY_ENTRY_FIELDS)):
+            errors.append('%s has an unexpected field "%s"' % (where, field))
+
+        review_type = entry.get("type")
+        if "type" in entry and review_type not in REVIEW_SECTIONS:
+            errors.append(
+                "%s.type %s is not one of %s"
+                % (where, json.dumps(review_type), ", ".join(REVIEW_SECTIONS))
+            )
+
+        if "previous" in entry:
+            previous = entry["previous"]
+            # Reuse the review-section shape rules for the archived review.
+            section_errors = check_review_section("<previous>", previous, "")
+            errors.extend(
+                "%s.previous%s" % (where, message.split("<previous>", 1)[-1])
+                for message in section_errors
+            )
+            if isinstance(previous, dict):
+                status = previous.get("status")
+                if status not in COMPLETED_SECTION_STATUSES:
+                    errors.append(
+                        '%s.previous.status must be a completed review '
+                        "(%s), not %s"
+                        % (
+                            where,
+                            " or ".join(COMPLETED_SECTION_STATUSES),
+                            json.dumps(status),
+                        )
+                    )
+
+        replaced_at = entry.get("replaced_at")
+        if "replaced_at" in entry:
+            problem = describe_timestamp_problem(replaced_at)
+            if problem:
+                errors.append("%s.replaced_at %s" % (where, problem))
+
+        replaced_by = entry.get("replaced_by")
+        if "replaced_by" in entry and (
+            not isinstance(replaced_by, str) or not replaced_by.strip()
+        ):
+            errors.append("%s.replaced_by must be a non-empty string" % where)
+
+        reason = entry.get("reason")
+        if "reason" in entry and (not isinstance(reason, str) or not reason.strip()):
+            errors.append("%s.reason must be a non-empty string" % where)
 
     return errors
 

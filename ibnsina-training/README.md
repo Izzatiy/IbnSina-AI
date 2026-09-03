@@ -20,6 +20,7 @@ ibnsina-training/
 │   ├── scan_sensitive_data.py
 │   ├── export_dataset.py
 │   ├── review_record.py
+│   ├── re_review_record.py
 │   └── approve_record.py
 └── README.md
 ```
@@ -544,6 +545,83 @@ All 10 records are `draft` with both reviews `pending`. **No medical review has
 been performed**, so nothing is approved and `data/exports/` is empty. The dataset
 is waiting on a qualified human medical reviewer; the tooling itself has been
 verified end to end against temporary synthetic copies.
+
+## Re-review CLI
+
+`review_record.py` refuses to overwrite a completed review, because silently
+replacing a decision destroys the audit trail. `re_review_record.py` is the
+narrow, explicit exception — for correcting a review that was decided on the
+wrong criteria, or revisited:
+
+```bash
+python scripts/re_review_record.py \
+  data/master/uzbek_medical_v1.jsonl \
+  uz-med-000001 \
+  --type language \
+  --status passed \
+  --reviewer language-reviewer-001 \
+  --reason "Previous decision applied medical-completeness criteria that belong to the medical review."
+```
+
+`--reason` is required and must not be blank: it is the record of *why* a
+completed decision was replaced. `--notes` stays optional on a pass and required
+on a fail, and `reviewed_at` is generated from the current UTC time.
+
+**The previous review is filed, never deleted.** Each correction appends an entry
+to the record's `review_history`:
+
+```json
+"review_history": [
+  {
+    "type": "language",
+    "previous": {
+      "status": "failed",
+      "reviewer": "language-reviewer-001",
+      "reviewed_at": "2026-09-03T10:14:33Z",
+      "notes": "..."
+    },
+    "replaced_at": "2026-09-03T19:38:35Z",
+    "replaced_by": "language-reviewer-001",
+    "reason": "Previous decision applied medical-completeness criteria..."
+  }
+]
+```
+
+| Field | Meaning |
+| --- | --- |
+| `type` | Which review was replaced: `language` or `medical`. |
+| `previous` | The whole replaced review, kept verbatim. Must be a completed (`passed`/`failed`) review. |
+| `replaced_at` | When the correction happened, timezone-aware ISO 8601. |
+| `replaced_by` | Internal identifier of whoever made the correction. |
+| `reason` | Why the previous decision was replaced. |
+
+`review_history` is **optional** — a record that was never corrected does not
+carry it — and it is **master-only metadata that never reaches a training
+export**. Exports are built by picking the conversation out of each record, so a
+record with any amount of review history still exports as `{"messages": [...]}`
+and nothing else.
+
+The tool only replaces a review that is already `passed` or `failed`. A `pending`
+review belongs to `review_record.py`: this is for correcting a decision, not
+making a first one. It cannot set a review back to `pending`, and like every
+other command here it never touches `review_status` — correcting a review to
+`passed` still leaves approval to a separate human action.
+
+Same protections as the rest: the whole master file is validated before and after
+the change, a missing or duplicated id is refused rather than guessed at, and the
+write is atomic, so any failure leaves the master byte-for-byte unchanged.
+
+Exit codes: `0` recorded, `1` invalid dataset or request (record not found,
+duplicate id, target review not completed, blank reason, bad argument), `2` file
+or system error.
+
+### What each review is for
+
+A **language review** judges the text as language: grammar, naturalness, clarity,
+readability, terminology, and whether the meaning comes across. It should **not**
+fail a record for lacking clinical guidance, thresholds, age-specific detail or
+other medical completeness — those are the **medical review's** business. Mixing
+the two is precisely the kind of mistake this command exists to correct.
 
 ## Dataset export
 
