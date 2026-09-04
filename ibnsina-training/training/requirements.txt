@@ -1,0 +1,37 @@
+# Ibn Sina AI — smoke-test QLoRA training environment
+#
+# Versions are the Step 11E pins. Do not change them here; change them in
+# ../docs/training/training-stack.md first, with the reasoning.
+#
+# Target: Python 3.11, Linux, single NVIDIA GPU (24 GB min / 48 GB preferred).
+# Model:  Qwen/Qwen2.5-7B-Instruct (text-only, 4-bit QLoRA).
+#
+# ---------------------------------------------------------------------------
+# PyTorch and CUDA — read before installing
+# ---------------------------------------------------------------------------
+# torch==2.13.0 from the DEFAULT PyPI index is a CUDA 13 build: it pulls
+# nvidia-cudnn-cu13, nvidia-nccl-cu13, nvidia-cusparselt-cu13 and
+# nvidia-nvshmem-cu13. No special index is needed for that case, which is why
+# this file carries a plain version specifier and no index directives.
+#
+# If the pod's NVIDIA driver is too old for CUDA 13, torch must instead be
+# installed from the PyTorch CUDA 12.8 index BEFORE this file is applied:
+#
+#     pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu128
+#     pip install -r requirements.txt
+#
+# pip will then see torch already satisfied and leave it alone. Do not add that
+# index to this file: it would route every package through it, not just torch.
+#
+# Check the driver with nvidia-smi first. See README.md.
+# ---------------------------------------------------------------------------
+
+torch==2.13.0
+transformers==5.15.1
+peft==0.20.0
+trl==1.10.0
+bitsandbytes==0.50.1
+accelerate==1.14.0
+datasets==5.0.1
+
+# Unsloth is intentionally NOT included. See ../docs/training/training-stack.md.
