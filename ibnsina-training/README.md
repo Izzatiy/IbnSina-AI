@@ -541,10 +541,25 @@ set that can prove the whole pipeline works before any training is attempted.
 
 ### Current status of this dataset
 
-All 10 records are `draft` with both reviews `pending`. **No medical review has
-been performed**, so nothing is approved and `data/exports/` is empty. The dataset
-is waiting on a qualified human medical reviewer; the tooling itself has been
-verified end to end against temporary synthetic copies.
+The first real model-ready export exists: **9 of the 10 records are approved and
+exported.**
+
+| | |
+| --- | --- |
+| Master records | 10 |
+| Language review | 9 passed, 1 failed |
+| Medical review | 9 passed, 1 pending |
+| `review_status` | 9 approved, 1 draft |
+| Exported examples | 9 |
+
+Every one of those 9 records went through the full path: a human language review,
+a human medical review recorded under `medical-reviewer-001`, and an explicit
+approval under `training-approver-001`. No step was automatic.
+
+`uz-med-000001` is **excluded and stays excluded**: its language review failed
+(the unit abbreviation `mm sim. ust.` is not understandable to the reader) and its
+medical review is still pending, so it is `draft`, unapproved, and absent from the
+export. It needs a rewrite and a fresh review before it can contribute.
 
 ## Re-review CLI
 
@@ -769,7 +784,14 @@ permission-controlled memory/data layer.
 sensitive-data scanning, the master/export split, approval gating, separate
 language and medical review metadata, the review CLI, and the approval CLI.
 
-The first smoke-test dataset has been written — 10 Uzbek Latin records, all
-`draft`. **The training export is blocked pending real human medical review.**
-No model training, fine-tuning, inference or API integration is implemented.
+The first smoke-test dataset is complete and exported: 10 Uzbek Latin master
+records, 9 of them human-reviewed, human-approved and present in
+`data/exports/uzbek_medical_v1.jsonl`. The export is reproducible byte-for-byte
+and carries only `{"messages": [...]}`.
+
+**This is a pipeline smoke test, not production clinical quality.** Nine short
+examples cannot teach safe medical communication; they demonstrate that the
+master format, reviews, approval, export, validation and privacy scanning fit
+together. No model training, fine-tuning, inference or API integration is
+implemented.
 
