@@ -239,7 +239,6 @@ demonstrated, or deployed as one.
 The following are **deliberately not yet chosen** and must not be inferred from
 this document:
 
-- exact Qwen checkpoint
 - PyTorch version
 - Transformers version
 - PEFT version
@@ -251,3 +250,8 @@ this document:
 These are settled in a later step, after the pod exists and its driver, CUDA
 runtime and Python version are known — because those facts constrain the
 choices.
+
+The **model checkpoint is no longer undecided**: Step 11B selected
+`Qwen/Qwen3.5-9B`. See `model-selection.md` for the decision and its rationale,
+including the fact that it is a multimodal checkpoint, which affects the loading
+path and LoRA target modules.
