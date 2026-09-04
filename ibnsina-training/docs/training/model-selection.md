@@ -142,19 +142,14 @@ file    ibnsina-training/data/exports/uzbek_medical_v1.jsonl
 size    12,976 bytes, 9 lines
 ```
 
-## Still intentionally undecided
+## Software stack
 
-Selecting the checkpoint does not settle anything else. These remain open:
+The stack that serves this checkpoint was pinned in Step 11E: Python 3.11,
+PyTorch 2.13.0 (CUDA 13 wheel), Transformers 5.15.1, PEFT 0.20.0, TRL 1.10.0,
+bitsandbytes 0.50.1, Accelerate 1.14.0, datasets 5.0.1, and **no Unsloth**.
 
-- PyTorch version
-- Transformers version
-- PEFT version
-- TRL version
-- bitsandbytes version
-- Accelerate version
-- whether Unsloth is used at all, and if so which version
-
-They are settled after the pod exists and its driver, CUDA runtime and Python
-version are known, since those facts constrain the choices.
+`Qwen2ForCausalLM` support, NF4 4-bit loading, PEFT's Qwen2 LoRA targets and
+TRL's conversational SFT were each verified against those exact versions. See
+`training-stack.md` for the evidence and the caveats.
 
 See `runpod-environment-spec.md` for the environment these will run in.

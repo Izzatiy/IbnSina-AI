@@ -234,22 +234,12 @@ training → adapter → retrievable artifact. Any model it produces is a
 throwaway pipeline artifact, not a medical assistant, and must not be evaluated,
 demonstrated, or deployed as one.
 
-## Intentionally undecided
+## Decisions recorded elsewhere
 
-The following are **deliberately not yet chosen** and must not be inferred from
-this document:
-
-- PyTorch version
-- Transformers version
-- PEFT version
-- TRL version
-- bitsandbytes version
-- Accelerate version
-- whether Unsloth is used at all, and if so which version
-
-These are settled in a later step, after the pod exists and its driver, CUDA
-runtime and Python version are known — because those facts constrain the
-choices.
+Step 11E pinned the software stack. See `training-stack.md` for the versions,
+the evidence behind each, and the caveats — most importantly that the PyTorch
+wheel is a CUDA 13 build, which must be checked against the pod's driver before
+installing.
 
 The **model checkpoint is no longer undecided**: the active selection is
 `Qwen/Qwen2.5-7B-Instruct` (Step 11D), which supersedes the `Qwen/Qwen3.5-9B`
