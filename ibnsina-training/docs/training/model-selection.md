@@ -1,106 +1,136 @@
 # Model checkpoint selection — first smoke-test QLoRA run
 
-Status: **Step 11B — selection only.** Nothing has been downloaded, installed or
+Status: **Step 11D — selection only.** Nothing has been downloaded, installed or
 trained. This records a decision so it survives the ephemeral development
 container.
 
 ## Selected checkpoint
 
 ```
-Qwen/Qwen3.5-9B
+Qwen/Qwen2.5-7B-Instruct
 ```
+
+7.61B parameters, text-only, Apache-2.0, ungated.
+
+> **Supersedes `Qwen/Qwen3.5-9B`,** which was selected in Step 11B and replaced
+> in Step 11D after a text-only comparison. See
+> [Superseded selection](#superseded-selection-qwenqwen35-9b) below for why.
+> `Qwen/Qwen3.5-9B` is **no longer the active checkpoint** and must not be used
+> for this run.
 
 ## Rationale
 
-- It is the **conversational / instruction-oriented** checkpoint.
-- Our approved training export is already structured as `system`, `user` and
-  `assistant` messages, so it maps onto a chat-tuned model directly.
-- For a first end-to-end smoke test we want **minimal chat-template and
-  alignment mismatch**. Starting from a base model would mean teaching
-  conversational structure from nine examples, which is the wrong problem to be
-  solving at this stage.
-- The 9-example dataset is **not** intended to create a medically useful model.
-- The purpose of the run is only to prove:
+**The first run is a text-only pipeline smoke test.** Every reason below follows
+from that, and from the fact that model quality is explicitly not what this run
+measures.
 
-  > approved export → model load → QLoRA training → adapter artifact → adapter reload
-
-- **Success is a loadable adapter artifact, not output quality.**
-
-## Do not use the Base checkpoint
-
-**Do not use `Qwen/Qwen3.5-9B-Base` for this first smoke test.**
-
-The base model has no instruction tuning and no established chat behaviour, so
-it would add exactly the alignment mismatch this run is designed to avoid.
-
-Base-vs-Instruct may be revisited later, **once there is a genuinely large and
-reviewed training corpus.** With enough reviewed data, starting from Base becomes
-a defensible option rather than a handicap. That is not the situation today.
+- **`Qwen/Qwen2.5-7B-Instruct` is genuinely text-only.** Its `config.json` is
+  flat — no `vision_config`, no `image_token_id`, no nested `text_config`.
+- **It uses the standard causal-LM loading path**: `AutoTokenizer` plus
+  `AutoModelForCausalLM` against `Qwen2ForCausalLM`. This is the most ordinary,
+  most documented load in the ecosystem.
+- **Our dataset already uses `system`/`user`/`assistant` chat structure**, which
+  this checkpoint's chat template consumes directly with no restructuring.
+- **Its LoRA targets are straightforward and language-only** — the usual
+  `q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`,
+  with nothing that needs excluding.
+- **It avoids vision-tower handling** entirely. There is no vision tower to load,
+  to skip when attaching adapters, or to carry in memory.
+- **It avoids Qwen3.5 multimodal and linear-attention tooling complexity.** The
+  Qwen3.5 family is multimodal throughout and uses hybrid linear/full attention,
+  so quantisation and adapter support for it would have to be verified rather
+  than assumed.
+- **It avoids Qwen3 thinking-block handling.** The Qwen3 chat template carries
+  `<think>` and `enable_thinking` machinery. Our nine examples contain no
+  reasoning traces, so that template can inject empty think blocks into assistant
+  turns during formatting — a known sharp edge, avoidable entirely by not using
+  a thinking-mode template.
+- **7.61B is comfortably appropriate for the planned single 24–48 GB GPU QLoRA
+  run.** Roughly 4.5 GB of 4-bit weights, and about 8–10 GB total at sequence
+  2048 — well inside the 24 GB minimum recorded in the environment spec.
+- **Model quality is not the objective of this run.** The older, smaller, plainer
+  model is the correct engineering choice precisely because nothing about it is
+  novel.
 
 ## Verified repository facts
 
-Checked read-only against the Hugging Face API on 2026-09-04. No weights were
-downloaded — only repository metadata and `config.json`.
+Checked read-only against the Hugging Face API. No weights were downloaded —
+only repository metadata, `config.json` and `tokenizer_config.json`.
 
 | | |
 | --- | --- |
-| Repository | `Qwen/Qwen3.5-9B` — exists, public |
-| Gated | No (no access request or token gate for download) |
+| Repository | `Qwen/Qwen2.5-7B-Instruct` — exists, public |
+| Parameters | 7,615,616,512 (BF16) |
+| Gated | No |
 | License | Apache-2.0 |
-| Conversational | Yes (`conversational` tag) — confirms the instruct-oriented rationale |
-| Base model | `Qwen/Qwen3.5-9B-Base`, i.e. this checkpoint is a finetune of it — confirms the Base-vs-Instruct relationship |
-| Architecture | `Qwen3_5ForConditionalGeneration`, `model_type: qwen3_5` |
-| Precision | bfloat16 |
-| Last modified | 2026-03-02 |
+| Pipeline tag | `text-generation` |
+| Conversational | Yes |
+| Architecture | `Qwen2ForCausalLM`, `model_type: qwen2` |
+| Config shape | Flat — no vision or image keys, no nested configs |
+| Hidden size / layers | 3584 / 28 (28 attention heads, 4 KV heads) |
+| Max positions | 32768 |
+| Chat template | Present, 2,507 chars — `system`/`user`/`assistant`, no `<think>`, no vision handling |
 
-The existence check was validated against a control: deliberately fake model IDs
-return HTTP 401 while this one returns 200, so the result is meaningful rather
-than an artifact of the network proxy.
+## Do not use the Base checkpoint
 
-## Important: this is a multimodal checkpoint
+**Do not use a base (non-instruct) checkpoint for this first smoke test.**
 
-**`Qwen/Qwen3.5-9B` is a vision-language model, not a text-only one.** Its
-pipeline tag is `image-text-to-text`, its config carries an `image_token_id` and
-a nested `text_config`, and its architecture class is
-`Qwen3_5ForConditionalGeneration`.
+A base model has no instruction tuning and no established chat behaviour, so it
+would add exactly the alignment mismatch this run is designed to avoid.
 
-This does **not** invalidate the selection. Our data is text-only, and
-fine-tuning the language side of a VLM on text-only conversations is normal. But
-it has consequences that the next steps must account for:
+Base-vs-Instruct may be revisited later, **once there is a genuinely large and
+reviewed training corpus.** With enough reviewed data, starting from a base model
+becomes a defensible option rather than a handicap. That is not the situation
+today.
 
-1. **Loading path differs.** It is likely to need `AutoProcessor` and the
-   conditional-generation class rather than a plain `AutoTokenizer` plus
-   `AutoModelForCausalLM`. Assuming the text-only path will fail at load time.
-2. **LoRA target modules need care.** Adapters should target the language
-   model's projections, **not** the vision tower. Naively targeting "all linear
-   layers" would adapt a vision encoder that our text-only data can never train
-   meaningfully.
-3. **Footprint is larger than a text-only 9B**, because the vision tower sits on
-   top of the language model. This does not break the 24 GB minimum for a 4-bit
-   QLoRA run, but it does reinforce the 48 GB preference recorded in the
-   environment spec.
-4. **The architecture is new and hybrid.** `config.json` shows alternating
-   `linear_attention` and `full_attention` layers. Support for it across
-   quantisation and adapter tooling should be **verified**, not assumed, when
-   versions are pinned.
-5. **The chat template should be checked against our 3-message structure**
-   (`system`, `user`, `assistant`) before training, since the template is
-   multimodal-aware.
+## Superseded selection: `Qwen/Qwen3.5-9B`
 
-None of these are decided here. They are flagged so the version-pinning and
-training-code steps address them deliberately instead of discovering them at
-runtime.
+**Historical record only. This checkpoint is not in use.**
 
-## Smoke-test success criterion, restated
+Step 11B selected `Qwen/Qwen3.5-9B` as the conversational checkpoint. Read-only
+metadata then showed it is a **vision-language model**: pipeline tag
+`image-text-to-text`, architecture `Qwen3_5ForConditionalGeneration`, an
+`image_token_id`, a nested `text_config`, a `preprocessor_config.json` and a
+video preprocessor, plus hybrid `linear_attention`/`full_attention` layers and a
+7,756-character chat template carrying both thinking and vision handling.
 
-**Success means: training completes and produces an adapter artifact that can be
-loaded successfully.**
+A Step 11C comparison confirmed there is **no text-only checkpoint anywhere in
+the Qwen3.5 family** — all 21 official Qwen3.5 repositories, every size and every
+`-Base` variant, are `image-text-to-text`. Staying in that family while going
+text-only was therefore not an option.
 
-Model quality is **not** a success criterion and must not be reported as one.
-The 9-example dataset is expected to overfit and must not be treated as
-producing a usable or safe medical model. Any model this run produces is a
-throwaway pipeline artifact — not a medical assistant — and must not be
-evaluated, demonstrated or deployed as one.
+Three concrete failure modes it introduced, none of which our text-only data
+could ever benefit from:
+
+1. the wrong loader class at load time (`AutoProcessor` and a
+   conditional-generation class rather than the standard causal-LM path),
+2. adapters silently attached to a vision encoder if LoRA targeted all linear
+   layers,
+3. unverified 4-bit kernel support for the `qwen3_5` hybrid attention
+   architecture.
+
+`Qwen/Qwen3-8B` was also considered and rejected: genuinely text-only and
+otherwise suitable, but its chat template carries thinking-mode machinery, which
+is one more thing to get right in a run whose entire purpose is having nothing go
+wrong.
+
+## Smoke-test success criterion
+
+**Success means:**
+
+> approved dataset → model load → QLoRA training → adapter save → adapter reload
+
+That is the whole bar for the first run. Model quality is **not** a success
+criterion and must not be reported as one.
+
+### Limitation — read this before interpreting any result
+
+**The 9-example dataset is expected to overfit, and must not be considered a
+usable or safe medical model.**
+
+Nine short conversations cannot teach safe medical communication. Any model this
+run produces is a throwaway pipeline artifact — not a medical assistant — and
+must not be evaluated, demonstrated or deployed as one.
 
 ## Dataset unchanged
 
@@ -125,7 +155,6 @@ Selecting the checkpoint does not settle anything else. These remain open:
 - whether Unsloth is used at all, and if so which version
 
 They are settled after the pod exists and its driver, CUDA runtime and Python
-version are known, since those facts constrain the choices — and now also after
-confirming which versions actually support the `qwen3_5` architecture.
+version are known, since those facts constrain the choices.
 
 See `runpod-environment-spec.md` for the environment these will run in.

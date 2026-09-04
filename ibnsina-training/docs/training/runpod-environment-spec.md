@@ -251,7 +251,8 @@ These are settled in a later step, after the pod exists and its driver, CUDA
 runtime and Python version are known — because those facts constrain the
 choices.
 
-The **model checkpoint is no longer undecided**: Step 11B selected
-`Qwen/Qwen3.5-9B`. See `model-selection.md` for the decision and its rationale,
-including the fact that it is a multimodal checkpoint, which affects the loading
-path and LoRA target modules.
+The **model checkpoint is no longer undecided**: the active selection is
+`Qwen/Qwen2.5-7B-Instruct` (Step 11D), which supersedes the `Qwen/Qwen3.5-9B`
+chosen in Step 11B. It is text-only and loads by the standard causal-LM path, so
+no vision-tower or processor handling is needed. See `model-selection.md` for the
+decision and its rationale.
